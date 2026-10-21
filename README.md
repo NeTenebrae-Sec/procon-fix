@@ -114,4 +114,4 @@ sudo systemctl reenable joycond       # solo si realmente usas Joy-Cons
 
 ## Licencia
 
-**MIT** (ver [LICENSE](LICENSE)) — Copyright (c) 2026 NeTenebrae.
+**MIT** (ver [LICENSE](LICENSE))
