@@ -10,114 +10,111 @@
      deterministic Bluetooth fix · Switch Pro clone · Arch Linux
 ```
 
-> One-year-old problem, solved in one night. A cheap **Nintendo Switch Pro
-> Controller clone** would pair over Bluetooth on Arch Linux but never produce
-> a single button press. This repo documents the **real root causes** (they
-> were not the ones you'd guess) and ships a script that fixes all of them.
+> Problema de un año, resuelto en una noche. Una **réplica barra de mando
+> Nintendo Switch Pro** emparejaba por Bluetooth en Arch Linux, aparecía en
+> `bluetoothctl`… pero ni una sola pulsación llegaba nunca. La radio
+> funcionaba perfecta (`btmon` mostraba informes de entrada a 66 Hz): el
+> fallo estaba siempre en el puente HID
+> (`mando -> radio ACL -> bluetoothd -> puente HID -> /dev/input`), nunca en
+> la radio. Este repo documenta las **causas raíz reales** (no eran las que
+> nadie esperaba) y entrega un script que las corrige todas.
 
 ---
 
-## TL;DR — the fix in 30 seconds
+## TL;DR: la solución en 30 segundos
 
 ```bash
-sudo bash fix-procon.sh          # apply everything (idempotent)
-sudo bash fix-procon.sh --pair   # re-pair only (mando in SYNC mode)
-        bash fix-procon.sh --status  # diagnose, changes nothing (no root needed)
+sudo bash fix-procon.sh          # aplica todo (idempotente)
+sudo bash fix-procon.sh --pair   # solo re-emparejar (mando en modo SYNC)
+        bash fix-procon.sh --status  # diagnóstico, no cambia nada (sin root)
 ```
 
-Then open <https://hardwaretester.com/gamepad> and press buttons.
+Después abre <https://hardwaretester.com/gamepad> y pulsa botones.
 
-## The problem
+## Instalación
 
-Symptoms observed for months:
+**Requisitos:**
 
-- Controller **pairs** with bluez, shows up in `bluetoothctl`… but
-- **No joystick appears** in `/dev/input`, nothing works in games or testers.
-- The radio side was *perfect*: `btmon` showed the controller streaming input
-  reports at 66 Hz over ACL. The data was arriving — it just died before
-  reaching `/dev/input`.
-
-The stack is: `controller → ACL radio → bluetoothd → HID bridge → /dev/input`.
-The break was always in the **bridge**, never in the radio.
-
-## Real root causes (all of them)
-
-Full write-up with evidence: [`docs/THE-PROBLEM.md`](docs/THE-PROBLEM.md).
-
-| # | Root cause | Symptom it caused | Fix |
-|---|---|---|---|
-| RC1 | `ClassicBondedOnly=true` in bluez | Clone rejected: *"!bonded device"* | `ClassicBondedOnly=false` |
-| RC2 | Kernel 7.2.10 left without modules (`hidp` unloadable) | `Host is down (112)`, no HID device ever | Reboot into 7.2.11 (user's manual reboot) |
-| RC3 | MOVISUN K80 headset SDP noise | Scary error every 60 s — **red herring**, unrelated | None needed (ignore / unpair device) |
-| RC4 | **`joycond` EVIOCGRAB on the gamepad node** | Device existed, LEDs moved, but **zero buttons reached userspace** | `systemctl disable --now joycond` |
-| RC5 | Clone firmware ignores rumble subcommands | Force-feedback uploads succeed, motor never spins | Nothing — hardware limit of the clone |
-| RC6 | Clone drops its link key on host-initiated disconnect | `Paired: no` after `bluetoothctl disconnect`; `br-connection-create-socket` on reconnect | Re-pair with `--pair` (forced mode) |
-| RC7 | `/dev/input/event*` recreated as `root:root` on each reconnect, `uaccess` ACL unreliable | *"it worked, then buttons vanished again"* | udev rule + `input` group membership |
-
-> **The two villains that hid behind each other:** `joycond` (RC4) made the
-> device exist but be mute; flaky ACLs (RC7) made it work and then silently
-> stop working. Each one masqueraded as the other's symptom.
-
-## Why this configuration
-
-- **UHID userspace bridge** (`UserspaceHID=true`), not kernel HIDP: after the
-  reboot `hidp` *was* available, but `hid_nintendo` attaches happily on top of
-  the UHID device — gaining driver features (calibration, IMU, player LEDs)
-  with zero kernel-socket fragility. H3 in the spec, decided with data.
-- **`hid_nintendo` driver** (kernel 7.2.11): sticks, D-pad, buttons, IMU and
-  player LEDs all bound to `0005:057E:2009.*`.
-- **`joycond` disabled**: it is for detached Joy-Cons in grip mode; it grabs
-  Pro Controllers and swallows their events for no benefit.
-
-## What works / what doesn't
-
-| Feature | Status |
-|---|---|
-| Sticks, D-pad, all buttons, triggers | ✅ |
-| IMU (gyro/accelerometer) | ✅ exposed as `event*` |
-| Player LEDs | ✅ driver assigns pattern |
-| Battery reporting | ⚠️ clone reports nonsense (`0%`), ignore it |
-| Rumble | ❌ clone firmware drops subcommands (`joycon_enforce_subcmd_rate` spam in dmesg) |
-| Auto-reconnect after controller power-off | ✅ (`Trusted: yes`) |
-| Auto-reconnect after **host**-initiated disconnect | ⚠️ may need `--pair` (RC6 — clone's fault) |
-
-## Requirements
-
-- Arch Linux, kernel **≥ 7.2.11** (`hid_nintendo` built)
-- `bluez` with `input.conf`
-- A BT adapter (this was proven on Realtek RTL8821C)
-- The controller: any `057E:2009` clone
-
-## Install
+- Arch Linux con kernel **≥ 7.2.11** (`hid_nintendo` compilado)
+- `bluez` con `input.conf`
+- Un adaptador Bluetooth (probado con Realtek RTL8821C)
+- El mando: cualquier clon `057E:2009`
 
 ```bash
-git clone https://github.com/neteumbra/procon-fix.git
+git clone https://github.com/NeTenebrae-Sec/procon-fix.git
 cd procon-fix
 sudo bash fix-procon.sh
 ```
 
-The script is **idempotent** — run it as many times as you want; it only
-changes what's missing and always keeps `*.bak` backups of touched configs.
+El script es **idempotente**: ejecútalo las veces que quieras; solo cambia
+lo que falta y siempre guarda copias `*.bak` de los configs que toca.
 
-## Docs
+## Causas raíz reales (todas)
 
-| Doc | What's inside |
+Análisis completo con evidencia: [`docs/THE-PROBLEM.md`](docs/THE-PROBLEM.md).
+
+| # | Causa raíz | Síntoma que causaba | Corrección |
+|---|---|---|---|
+| RC1 | `ClassicBondedOnly=true` en bluez | El clon era rechazado: *"!bonded device"* | `ClassicBondedOnly=false` |
+| RC2 | Kernel 7.2.10 quedó sin módulos (`hidp` no cargable) | `Host is down (112)`, nunca apareció dispositivo HID | Reboot a 7.2.11 (reinicio manual del usuario) |
+| RC3 | Ruido SDP del headset MOVISUN K80 | Error aterrador cada 60 s — **pista falsa**, sin relación | Nada (ignorar / desvincular el dispositivo) |
+| RC4 | **`joycond` hace `EVIOCGRAB` sobre el nodo del gamepad** | El dispositivo existía, los LED se movían, pero **cero botones llegaban a userspace** | `systemctl disable --now joycond` |
+| RC5 | El firmware del clon ignora los subcomandos de rumble | Las cargas de force-feedback funcionaban, el motor nunca vibraba | Nada — límite de hardware del clon |
+| RC6 | El clon pierde su clave de enlace al desconectar el host | `Paired: no` tras `bluetoothctl disconnect`; `br-connection-create-socket` al reconectar | Re-emparejar con `--pair` (modo forzado) |
+| RC7 | `/dev/input/event*` se recrea como `root:root` en cada reconexión; ACL `uaccess` poco fiable | *"funcionó, y luego los botones desaparecieron"* | Regla udev + pertenencia al grupo `input` |
+
+> **Los dos villanos que se escondían el uno tras el otro:** `joycond` (RC4)
+> hacía que el dispositivo existiera pero estuviera mudo; las ACL
+> inestables (RC7) hacían que funcionara y luego dejara de funcionar en
+> silencio. Cada uno se disfrazaba del síntoma del otro.
+
+## Estado de funciones
+
+| Función | Estado |
 |---|---|
-| [`docs/THE-PROBLEM.md`](docs/THE-PROBLEM.md) | The full debugging story: evidence, dead ends, and every real root cause |
-| [`docs/DIAGNOSTICS.md`](docs/DIAGNOSTICS.md) | The command playbook used to isolate the fault — reuse it for the next broken device |
-| [`docs/HARDWARE-LIMITS.md`](docs/HARDWARE-LIMITS.md) | What can *never* be fixed in software on these clones (and how to tell genuine from clone) |
-| [`SPEC.md`](SPEC.md) | The spec-driven development log: tokens T1–T7, iterations, decisions |
+| Sticks, D-pad, todos los botones, triggers | sí |
+| IMU (giroscopio / acelerómetro) | sí — expuesto como `event*` |
+| LEDs de jugador | sí — el driver asigna el patrón |
+| Reporte de batería | parcial — el clon reporta basura (`0%`), ignóralo |
+| Rumble | no — el firmware del clon descarta los subcomandos (spam de `joycon_enforce_subcmd_rate` en dmesg) |
+| Reconexión automática tras apagar el mando | sí (`Trusted: yes`) |
+| Reconexión tras desconexión iniciada por el host | parcial — puede requerir `--pair` (RC6, culpa del clon) |
 
-## Uninstall
+## Por qué esta configuración
 
-Everything is plain config — to revert:
+- **Puente HID en userspace UHID** (`UserspaceHID=true`), no el HIDP del
+  kernel: tras el reboot `hidp` *sí* estaba disponible, pero `hid_nintendo`
+  se engancha encima del dispositivo UHID sin fragilidad — gana las
+  funciones del driver (calibración, IMU, LEDs de jugador). Decidido con
+  datos.
+- **Driver `hid_nintendo`** (kernel 7.2.11): sticks, D-pad, botones, IMU y
+  LEDs de jugador, todo vinculado a `0005:057E:2009.*`.
+- **`joycond` desactivado**: está pensado para Joy-Cons sueltos en grip; agarra
+  los Pro Controllers y se traga sus eventos sin ningún beneficio.
+
+## Documentación
+
+| Documento | Qué contiene |
+|---|---|
+| [`docs/THE-PROBLEM.md`](docs/THE-PROBLEM.md) | La historia completa de depuración: evidencias, callejones sin salida y cada causa raíz real |
+| [`docs/DIAGNOSTICS.md`](docs/DIAGNOSTICS.md) | El manual de comandos usado para aislar la avería — reutilízalo con el próximo dispositivo roto |
+| [`docs/HARDWARE-LIMITS.md`](docs/HARDWARE-LIMITS.md) | Qué **nunca** se puede corregir por software en estos clones (y cómo distinguir un original de un clon) |
+| [`SPEC.md`](SPEC.md) | El registro de desarrollo spec-driven: tokens T1–T7, iteraciones, decisiones |
+
+## Desinstalación
+
+Todo es configuración pura — para revertir:
 
 ```bash
 sudo mv /etc/bluetooth/input.conf.bak /etc/bluetooth/input.conf
 sudo rm /etc/udev/rules.d/99-gamepad-access.rules
-sudo gpasswd -d netenebrae input      # remove yourself from the group
-sudo systemctl reenable joycond       # only if you actually use Joy-Cons
+sudo gpasswd -d netenebrae input      # te sacas del grupo
+sudo systemctl reenable joycond       # solo si realmente usas Joy-Cons
 ```
+
+## Licencia
+
+**MIT** (ver [LICENSE](LICENSE)) — Copyright (c) 2026 NeTenebrae.
 
 ---
 
